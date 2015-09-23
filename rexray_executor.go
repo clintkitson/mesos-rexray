@@ -21,14 +21,14 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
-	"log"
 
-	rexray "github.com/emccode/rexray/rexray/commands"
+	"github.com/docker/docker/pkg/plugins"
+	"github.com/docker/docker/pkg/tlsconfig"
 	exec "github.com/mesos/mesos-go/executor"
 	mesos "github.com/mesos/mesos-go/mesosproto"
-	"gopkg.in/yaml.v2"
 )
 
 type exampleExecutor struct {
@@ -51,6 +51,42 @@ func (exec *exampleExecutor) Disconnected(exec.ExecutorDriver) {
 	fmt.Println("Executor disconnected.")
 }
 
+type client interface {
+	Call(string, interface{}, interface{}) error
+}
+
+type volumeDriverProxy struct {
+	client
+}
+
+type volumeDriverProxyCreateRequest struct {
+	Name string
+	Opts map[string]string
+}
+
+type volumeDriverProxyCreateResponse struct {
+	Err string
+}
+
+func (pp *volumeDriverProxy) Create(name string, opts map[string]string) (err error) {
+	var (
+		req volumeDriverProxyCreateRequest
+		ret volumeDriverProxyCreateResponse
+	)
+
+	req.Name = name
+	req.Opts = opts
+	if err = pp.Call("VolumeDriver.Create", req, &ret); err != nil {
+		return
+	}
+
+	if ret.Err != "" {
+		err = errors.New(ret.Err)
+	}
+
+	return
+}
+
 func (exec *exampleExecutor) LaunchTask(driver exec.ExecutorDriver, taskInfo *mesos.TaskInfo) {
 	fmt.Println("Launching task", taskInfo.GetName(), "with command", taskInfo.Command.GetValue())
 
@@ -69,21 +105,28 @@ func (exec *exampleExecutor) LaunchTask(driver exec.ExecutorDriver, taskInfo *me
 	// this is where one would perform the requested task
 	//
 
-	rexray.UpdateLogLevel()
-	rexray.InitDriverManagers()
-	sdm := rexray.GetSdm()
+	// rexray.UpdateLogLevel()
+	// rexray.InitDriverManagers()
+	// sdm := rexray.GetSdm()
+	//
+	// allVolumes, err := sdm.GetVolume("", "")
+	// if err != nil {
+	// 	log.Fatal(err)
+	// }
+	//
+	// if len(allVolumes) > 0 {
+	// 	yamlOutput, err := yaml.Marshal(&allVolumes)
+	// 	if err != nil {
+	// 		log.Fatal(err)
+	// 	}
+	// 	fmt.Printf(string(yamlOutput))
+	// }
 
-	allVolumes, err := sdm.GetVolume("", "")
+	client, _ := plugins.NewClient("unix:///run/mesos/executor/rexray.sock", tlsconfig.Options{InsecureSkipVerify: true})
+	vd := volumeDriverProxy{client}
+	err = vd.Create("test", nil)
 	if err != nil {
-		log.Fatal(err)
-	}
-
-	if len(allVolumes) > 0 {
-		yamlOutput, err := yaml.Marshal(&allVolumes)
-		if err != nil {
-			log.Fatal(err)
-		}
-		fmt.Printf(string(yamlOutput))
+		fmt.Println("Got error", err)
 	}
 
 	// finish task
